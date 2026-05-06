@@ -1,0 +1,25 @@
+{
+  "name": "@dsp-pipeline/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --enable-source-maps dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.886.0",
+    "@aws-sdk/s3-request-presigner": "^3.886.0",
+    "@dsp-pipeline/shared": "workspace:*",
+    "bullmq": "^5.58.5",
+    "express": "^4.21.2",
+    "nanoid": "^5.1.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.23",
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
+  }
+}
+
