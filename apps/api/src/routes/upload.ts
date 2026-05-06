@@ -2,6 +2,7 @@ import type { EncodeJob } from "@dsp-pipeline/shared";
 import { Queue } from "bullmq";
 import express, { Router } from "express";
 
+import { initTrack } from "../db.js";
 import { UploadService } from "../services/UploadService.js";
 
 const router: Router = Router();
@@ -73,6 +74,8 @@ router.post("/complete", async (req, res) => {
     attempts: 3,
     backoff: { type: "exponential", delay: 2000 },
   });
+
+  initTrack(body.trackId, ["spotify", "apple", "deezer"]);
 
   return res.status(202).json({ ok: true });
 });
