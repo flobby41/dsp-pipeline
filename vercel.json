@@ -1,0 +1,7 @@
+{
+  "installCommand": "corepack enable && CI=1 pnpm install --frozen-lockfile --force",
+  "buildCommand": "pnpm --filter @dsp-pipeline/frontend build",
+  "devCommand": "pnpm --filter @dsp-pipeline/frontend dev -- --port $PORT",
+  "outputDirectory": "apps/frontend/.next"
+}
+
