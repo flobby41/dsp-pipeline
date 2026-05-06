@@ -1,6 +1,7 @@
 import type { EncodeJob } from "@dsp-pipeline/shared";
 import { Queue } from "bullmq";
 import express, { Router } from "express";
+import { nanoid } from "nanoid";
 
 import { initTrack } from "../db.js";
 import { UploadService } from "../services/UploadService.js";
@@ -39,7 +40,6 @@ router.post("/init", async (req, res) => {
 });
 
 type CompleteUploadBody = {
-  trackId: string;
   uploadId: string;
   s3Key: string;
   parts: { partNumber: number; eTag: string }[];
@@ -48,9 +48,6 @@ type CompleteUploadBody = {
 router.post("/complete", async (req, res) => {
   const body = req.body as CompleteUploadBody;
 
-  if (!body?.trackId || typeof body.trackId !== "string") {
-    return res.status(400).json({ error: "trackId is required" });
-  }
   if (!body?.uploadId || typeof body.uploadId !== "string") {
     return res.status(400).json({ error: "uploadId is required" });
   }
@@ -64,8 +61,9 @@ router.post("/complete", async (req, res) => {
   const uploadService = new UploadService();
   await uploadService.completeMultipart(body.uploadId, body.s3Key, body.parts);
 
+  const trackId = nanoid();
   const payload: EncodeJob = {
-    trackId: body.trackId,
+    trackId,
     s3Key: body.s3Key,
     formats: ["spotify", "apple", "deezer"],
   };
@@ -75,9 +73,9 @@ router.post("/complete", async (req, res) => {
     backoff: { type: "exponential", delay: 2000 },
   });
 
-  initTrack(body.trackId, ["spotify", "apple", "deezer"]);
+  initTrack(trackId, ["spotify", "apple", "deezer"]);
 
-  return res.status(202).json({ ok: true });
+  return res.status(202).json({ trackId });
 });
 
 export default router;

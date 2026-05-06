@@ -2,7 +2,7 @@ import type { DSPId } from "@dsp-pipeline/shared";
 import type { Request, Response } from "express";
 import express, { Router } from "express";
 
-import { updateDSPStatus } from "../db.js";
+import { getTrackStatus, updateDSPStatus } from "../db.js";
 import { sseClients } from "./status.js";
 
 const router: Router = Router();
@@ -66,12 +66,7 @@ router.post("/:dsp", express.json({ limit: "1mb" }), (req: Request, res: Respons
     confirmedAt,
   });
 
-  emitSseStatus(body.trackId, {
-    trackId: body.trackId,
-    dspId: dsp,
-    status: body.status,
-    confirmedAt: confirmedAt.toISOString(),
-  });
+  emitSseStatus(body.trackId, getTrackStatus(body.trackId) ?? []);
 
   return res.status(200).json({ ok: true });
 });
