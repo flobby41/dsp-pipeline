@@ -69,7 +69,10 @@ router.post("/complete", async (req, res) => {
     formats: ["spotify", "apple", "deezer"],
   };
 
-  await trackProcessQueue.add("encode", payload);
+  await trackProcessQueue.add("encode", payload, {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 2000 },
+  });
 
   return res.status(202).json({ ok: true });
 });
