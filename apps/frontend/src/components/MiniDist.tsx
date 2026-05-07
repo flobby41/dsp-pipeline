@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+const N_CHUNKS = 6;
+
 const DSPS = [
   { id: "spotify", name: "Spotify", fmt: "MP3 · 320kbps", col: "#1DB954" },
   { id: "apple", name: "Apple Music", fmt: "AAC · 256kbps", col: "#FF375F" },
@@ -51,74 +53,30 @@ type DspUiState = {
   retries: number;
 };
 
-type DSPStatus = {
-  dspId: "spotify" | "apple" | "deezer";
-  trackId: string;
-  status: "pending" | "sending" | "retrying" | "live" | "failed";
-  retries: number;
-  confirmedAt?: string;
-};
-
-type InitResponse = {
-  uploadId: string;
-  s3Key: string;
-  parts: { partNumber: number; presignedUrl: string }[];
-};
-
-type CompleteResponse = {
-  trackId: string;
-};
-
-const PART_SIZE_BYTES = 10 * 1024 * 1024;
-
-function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+function getDspUiState(
+  dsps: Record<string, DspUiState>,
+  dspId: string,
+): DspUiState {
+  return dsps[dspId] ?? { status: "pending", pct: 0, retries: 0 };
 }
 
-function xhrPutPart(
-  url: string,
-  body: Blob,
-  onProgress: (pct: number) => void,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-
-    xhr.upload.onprogress = (evt) => {
-      if (!evt.lengthComputable) return;
-      const pct = (evt.loaded / evt.total) * 100;
-      onProgress(pct);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const eTag = xhr.getResponseHeader("ETag") ?? xhr.getResponseHeader("etag");
-        if (!eTag) {
-          reject(new Error("Missing ETag response header"));
-          return;
-        }
-        resolve(eTag);
-        return;
-      }
-      reject(new Error(`PUT failed with status ${xhr.status}`));
-    };
-
-    xhr.onerror = () => reject(new Error("Network error during PUT"));
-    xhr.onabort = () => reject(new Error("Upload aborted"));
-    xhr.send(body);
-  });
+function patchDspUiState(
+  dsps: Record<string, DspUiState>,
+  dspId: string,
+  patch: Partial<DspUiState>,
+): Record<string, DspUiState> {
+  return {
+    ...dsps,
+    [dspId]: {
+      ...getDspUiState(dsps, dspId),
+      ...patch,
+    },
+  };
 }
 
-function createZeroBlob(byteLength: number): Blob {
-  return new Blob([new Uint8Array(byteLength)], { type: "application/octet-stream" });
-}
-
-function mapStatusToPct(status: DSPStatus["status"]): number {
-  if (status === "pending") return 0;
-  if (status === "sending") return 55;
-  if (status === "retrying") return 30;
-  if (status === "failed") return 100;
-  return 100;
+function generateFakeUploadId(): string {
+  const suffix = Math.random().toString(36).slice(2, 10).toUpperCase();
+  return `MPU-${suffix}`;
 }
 
 export default function MiniDist() {
@@ -155,13 +113,9 @@ export default function MiniDist() {
 
   const run = useCallback(
     async (name = "midnight_drive_master.wav") => {
-      const apiBase = getApiBaseUrl();
-      const sizeBytes = 196_608_000;
-
       setFname(name);
       setPhase("uploading");
-      setChunks([]);
-      setUid("");
+      setChunks(new Array(N_CHUNKS).fill(0));
       setEncPct(0);
       setEncStep(-1);
       setDsps(
@@ -169,77 +123,42 @@ export default function MiniDist() {
       );
       setLogs([]);
 
-      const initRes = await fetch(`${apiBase}/upload/init`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: name, sizeBytes }),
-      });
+      const uploadId = generateFakeUploadId();
+      setUid(uploadId);
+      log(`CreateMultipartUpload → UploadId: ${uploadId}`, "sys");
+      log(`File split into ${N_CHUNKS} parts × ${(187 / N_CHUNKS).toFixed(1)} MB`, "info");
 
-      if (!initRes.ok) {
-        throw new Error(`upload/init failed (${initRes.status})`);
-      }
+      await new Promise<void>((resolve) => {
+        const delays = new Array(N_CHUNKS).fill(0).map(() => Math.floor(Math.random() * 260));
+        const rates = new Array(N_CHUNKS).fill(0).map(() => 10 + Math.random() * 12);
+        let done = 0;
 
-      const initJson = (await initRes.json()) as InitResponse;
-      setUid(initJson.uploadId);
-      setChunks(new Array(initJson.parts.length).fill(0));
-
-      log(`CreateMultipartUpload → UploadId: ${initJson.uploadId}`, "sys");
-      log(
-        `File split into ${initJson.parts.length} parts × ${(sizeBytes / 1024 / 1024 / initJson.parts.length).toFixed(1)} MB`,
-        "info",
-      );
-
-      const etagsByPartNumber = new Map<number, string>();
-
-      await Promise.all(
-        initJson.parts.map(async (part, idx) => {
-          const byteLength =
-            part.partNumber < initJson.parts.length
-              ? PART_SIZE_BYTES
-              : sizeBytes - PART_SIZE_BYTES * (initJson.parts.length - 1);
-
-          log(`PUT Part ${part.partNumber}/${initJson.parts.length} → in-flight`, "upload");
-
-          const eTag = await xhrPutPart(
-            part.presignedUrl,
-            createZeroBlob(Math.max(1, byteLength)),
-            (pct) => {
+        delays.forEach((delay, i) => {
+          window.setTimeout(() => {
+            log(`PUT Part ${i + 1}/${N_CHUNKS} → in-flight`, "upload");
+            let p = 0;
+            const iv = window.setInterval(() => {
+              const rate = rates[i] ?? 12;
+              p = Math.min(100, p + rate + (Math.random() * 6 - 3));
               setChunks((prev) => {
-                const next = prev.length === initJson.parts.length ? [...prev] : new Array(initJson.parts.length).fill(0);
-                next[idx] = pct;
+                const next = prev.length === N_CHUNKS ? [...prev] : new Array(N_CHUNKS).fill(0);
+                next[i] = p;
                 return next;
               });
-            },
-          );
-
-          etagsByPartNumber.set(part.partNumber, eTag);
-          log(`Part ${part.partNumber} complete · ETag: ${eTag}`, "ok");
-        }),
-      );
-
-      log(`CompleteMultipartUpload → s3://${initJson.s3Key}`, "sys");
-
-      const completeRes = await fetch(`${apiBase}/upload/complete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uploadId: initJson.uploadId,
-          s3Key: initJson.s3Key,
-          parts: initJson.parts
-            .map((p) => ({
-              partNumber: p.partNumber,
-              eTag: etagsByPartNumber.get(p.partNumber) ?? "",
-            }))
-            .filter((p) => p.eTag),
-        }),
+              if (p >= 100) {
+                window.clearInterval(iv);
+                log(`Part ${i + 1} complete · ETag: "${Math.random().toString(16).slice(2, 18)}"`, "ok");
+                if (++done === N_CHUNKS) {
+                  window.setTimeout(() => {
+                    log("CompleteMultipartUpload", "sys");
+                    resolve();
+                  }, 350);
+                }
+              }
+            }, 65);
+          }, delay);
+        });
       });
-
-      if (!completeRes.ok) {
-        throw new Error(`upload/complete failed (${completeRes.status})`);
-      }
-
-      const completeJson = (await completeRes.json()) as CompleteResponse;
-      const trackId = completeJson.trackId;
 
       await sleep(400);
       setPhase("encoding");
@@ -280,7 +199,7 @@ export default function MiniDist() {
           });
           if (p >= 100) {
             window.clearInterval(iv);
-            log("All formats encoded · uploaded to S3 /processed/", "ok");
+            log("All formats encoded", "ok");
             resolve();
           }
         }, 88);
@@ -290,42 +209,50 @@ export default function MiniDist() {
       setPhase("distributing");
       log("DSP Adapter layer: dispatching to 3 platforms", "sys");
 
-      const es = new EventSource(`${apiBase}/releases/${trackId}/status`);
+      const distrib = async (
+        dsp: (typeof DSPS)[number],
+        delay: number,
+      ): Promise<void> => {
+        await sleep(delay);
+        setDsps((p) => patchDspUiState(p, dsp.id, { status: "sending" }));
+        log(`[${dsp.name}] POST /api/v1/releases`, "upload");
 
-      const applyStatuses = (statuses: DSPStatus[]) => {
-        setDsps((prev) => {
-          const next = { ...prev };
-          for (const s of statuses) {
-            next[s.dspId] = {
-              status: s.status,
-              pct: mapStatusToPct(s.status),
-              retries: s.retries ?? 0,
-            };
-          }
-          return next;
+        if (dsp.id === "spotify" && Math.random() < 0.5) {
+          await sleep(750);
+          setDsps((p) => patchDspUiState(p, dsp.id, { status: "failed" }));
+          log(`[${dsp.name}] 503 Service Unavailable · retry in 2s`, "err");
+          await sleep(2000);
+          setDsps((p) => patchDspUiState(p, dsp.id, { status: "retrying", retries: 1 }));
+          log(`[${dsp.name}] ↻ Retry #1 · exponential backoff`, "warn");
+          await sleep(500);
+          setDsps((p) => patchDspUiState(p, dsp.id, { status: "sending" }));
+          log(`[${dsp.name}] POST /api/v1/releases → retry`, "upload");
+        }
+
+        await new Promise<void>((resolve) => {
+          let p = 0;
+          const iv = window.setInterval(() => {
+            p = Math.min(100, p + 4 + Math.random() * 5);
+            setDsps((prev) => patchDspUiState(prev, dsp.id, { pct: p }));
+            if (p >= 100) {
+              window.clearInterval(iv);
+              resolve();
+            }
+          }, 90);
         });
 
-        const allLive = statuses.length > 0 && statuses.every((s) => s.status === "live");
-        if (allLive) {
-          es.close();
-          setPhase("live");
-          log("Pipeline complete · release live on all 3 platforms", "ok");
-        }
+        setDsps((p) => patchDspUiState(p, dsp.id, { status: "live", pct: 100 }));
+        log(`[${dsp.name}] Webhook: LIVE confirmed · artist notified`, "ok");
       };
 
-      es.addEventListener("status", (evt) => {
-        try {
-          const data = JSON.parse((evt as MessageEvent).data) as DSPStatus[];
-          applyStatuses(data);
-        } catch {
-          // ignore
-        }
-      });
+      await Promise.all([
+        distrib(DSPS[0], 0),
+        distrib(DSPS[2], 155),
+        distrib(DSPS[1], 340),
+      ]);
 
-      es.onerror = () => {
-        // eslint-disable-next-line no-console
-        console.warn("SSE connection error");
-      };
+      setPhase("live");
+      log("Pipeline complete", "ok");
     },
     [log],
   );
