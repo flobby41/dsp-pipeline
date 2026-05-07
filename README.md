@@ -123,7 +123,7 @@ dsp-pipeline/
 
 ## Running locally
 
-**Prerequisites:** Node 20+, pnpm, Redis, AWS credentials
+**Prerequisites:** Node 20+, pnpm, Redis
 
 ```bash
 git clone https://github.com/flobby41/dsp-pipeline
